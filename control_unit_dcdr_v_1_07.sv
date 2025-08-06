@@ -53,7 +53,8 @@ module CU_DCDR(
    output logic [1:0] RF_SEL,
    output logic REG_WRITE,
    output logic MEM_WRITE,
-   output logic MEM_READ2
+   output logic MEM_READ2,
+   output logic [2:0] BR_TYPE
       );
     
    //- datatypes for RISC-V opcode types
@@ -72,6 +73,17 @@ module CU_DCDR(
    opcode_t OPCODE; //- define variable of new opcode type
     
    assign OPCODE = opcode_t'(opcode); //- Cast input enum 
+   
+   
+   typedef enum logic [2:0] {
+        NO_BRANCH = 3'd0,
+        BEQ       = 3'd1,
+        BNE       = 3'd2,
+        BLT       = 3'd3,
+        BGE       = 3'd4,
+        BLTU      = 3'd5,
+        BGEU      = 3'd6
+    } branch_t;
 
    //- datatype for func3Symbols tied to values
    typedef enum logic [2:0] {
@@ -89,6 +101,7 @@ module CU_DCDR(
    
    assign FUNC3 = func3_t'(func3);
    
+   
        
    always_comb
    begin 
@@ -98,6 +111,7 @@ module CU_DCDR(
       REG_WRITE = 1'b0;
       MEM_WRITE = 1'b0;
       MEM_READ2 = 1'b0;
+      BR_TYPE = NO_BRANCH;
 
 		
       case(OPCODE)
@@ -119,7 +133,15 @@ module CU_DCDR(
          end
          
 		 BRANCH: begin
-            
+            unique case (FUNC3)
+            3'b000: BR_TYPE = BEQ;
+            3'b001: BR_TYPE = BNE;
+            3'b100: BR_TYPE = BLT;
+            3'b101: BR_TYPE = BGE;
+            3'b110: BR_TYPE = BLTU;
+            3'b111: BR_TYPE = BGEU;
+            default: BR_TYPE = NO_BRANCH;
+        endcase
          end
 		 	
          JAL:
