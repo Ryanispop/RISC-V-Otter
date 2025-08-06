@@ -47,6 +47,7 @@ typedef struct packed{
     logic [1:0] rf_wr_sel;
     logic [2:0] mem_type;  //sign, size
     logic [31:0] pc;
+    logic [2:0] br_type;
 } instr_t;
 
 typedef struct packed{
@@ -57,6 +58,15 @@ typedef struct packed{
     logic [31:0] J_TYPE;
 } types;
 
+typedef enum logic [2:0] {
+        NO_BRANCH = 3'd0,
+        BEQ       = 3'd1,
+        BNE       = 3'd2,
+        BLT       = 3'd3,
+        BGE       = 3'd4,
+        BLTU      = 3'd5,
+        BGEU      = 3'd6
+} branch_t;
 
 module OTTER_MCU(input CLK,
                 input INTR,
@@ -95,7 +105,6 @@ module OTTER_MCU(input CLK,
      assign memRead1 = 1'b1; 	//Fetch new instruction every cycle
 
     //PC sel
-    assign pc_sel = 2'b00;
     always_comb begin
         case (pc_sel)
             2'b00: next_pc = pc + 4;    // PC + 4
@@ -153,7 +162,8 @@ module OTTER_MCU(input CLK,
    .RF_SEL    (rf_sel),
    .REG_WRITE (regWrite),
    .MEM_WRITE (memWrite),
-   .MEM_READ2 (memRead)
+   .MEM_READ2 (memRead),
+   .BR_TYPE (de_inst.br_type)
    );
    
     instr_t de_ex_inst, de_inst;
@@ -237,15 +247,39 @@ module OTTER_MCU(input CLK,
     .RESULT(aluResult)
         );
     //Branch addr gen
-    assign jal = de_ex_inst.pc + DE_EX_TYPE.J_TYPE;
-    assign branch = de_ex_inst.pc + DE_EX_TYPE.B_TYPE;
-    assign jalr = rs1 + DE_EX_TYPE.I_TYPE; 
+    assign jump_pc = de_ex_inst.pc + DE_EX_TYPE.J_TYPE;
+    assign branch_pc = de_ex_inst.pc + DE_EX_TYPE.B_TYPE;
+    assign jalr_pc = rs1 + DE_EX_TYPE.I_TYPE; 
     
     //branch cond gen
     //Branch condition generator
     assign br_eq = (de_ex_opA == de_ex_opB);
     assign br_lt = ($signed(de_ex_opA) < $signed(de_ex_opB));
     assign br_ltu = (de_ex_opA < de_ex_opB);
+    
+    logic branch_taken;
+
+    always_comb begin
+        unique case (de_ex_inst.br_type)
+            BEQ:   branch_taken = br_eq;
+            BNE:   branch_taken = ~br_eq;
+            BLT:   branch_taken = br_lt;
+            BGE:   branch_taken = ~br_lt;
+            BLTU:  branch_taken = br_ltu;
+            BGEU:  branch_taken = ~br_ltu;
+            default: branch_taken = 1'b0;
+        endcase
+    end
+
+    always_comb begin
+        case (1'b1)
+            ((de_ex_inst.opcode == BRANCH) && branch_taken): pc_sel = 2'b01; // branch_pc
+            (de_ex_inst.opcode == JAL):             pc_sel = 2'b11; // jump_pc
+            (de_ex_inst.opcode == JALR):            pc_sel = 2'b10; // jalr_pc
+            default:                                pc_sel = 2'b00; // pc + 4
+        endcase
+    end
+
     
     always_ff@(posedge CLK) begin
         ex_mem_inst <= de_ex_inst;
