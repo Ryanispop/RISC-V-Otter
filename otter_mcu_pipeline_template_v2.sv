@@ -89,6 +89,7 @@ module OTTER_MCU(input CLK,
     logic [3:0]alu_fun;
     logic opA_sel;
     logic flush;
+    logic flush_id;
     logic br_lt,br_eq,br_ltu;
     
     
@@ -125,7 +126,7 @@ module OTTER_MCU(input CLK,
    
 
     always_ff @(posedge CLK) begin
-        if (flush)
+        if (flush || flush_id)
             if_de_pc <= 32'b0;
         else if (IF_ID_Write)
             if_de_pc <= pc;
@@ -214,6 +215,10 @@ module OTTER_MCU(input CLK,
             default: B = 32'd0;
         endcase
     end
+
+    //Jump Logic
+    assign jump_pc = de_ex_inst.pc + DECODE_TYPE.J_TYPE;
+    assign jalr_pc = rs1 + DECODE_TYPE.I_TYPE;
 
     always_ff @(posedge CLK) begin
         if (flush || stall) begin
@@ -308,8 +313,8 @@ module OTTER_MCU(input CLK,
         );
     //Branch addr gen
     assign jump_pc = de_ex_inst.pc + DE_EX_TYPE.J_TYPE;
-    assign branch_pc = de_ex_inst.pc + DE_EX_TYPE.B_TYPE;
     assign jalr_pc = rs1 + DE_EX_TYPE.I_TYPE; 
+    assign branch_pc = de_ex_inst.pc + DE_EX_TYPE.B_TYPE;
     
     //branch cond gen
     //Branch condition generator
@@ -334,15 +339,14 @@ module OTTER_MCU(input CLK,
     always_comb begin
         case (1'b1)
             ((de_ex_inst.opcode == BRANCH) && branch_taken): pc_sel = 2'b01; // branch_pc
-            (de_ex_inst.opcode == JAL):             pc_sel = 2'b11; // jump_pc
-            (de_ex_inst.opcode == JALR):            pc_sel = 2'b10; // jalr_pc
+            (de_inst.opcode == JAL):             pc_sel = 2'b11; // jump_pc
+            (de_inst.opcode == JALR):            pc_sel = 2'b10; // jalr_pc
             default:                                pc_sel = 2'b00; // pc + 4
         endcase
     end
 
-    assign flush = (de_ex_inst.opcode == BRANCH && branch_taken) ||
-               (de_ex_inst.opcode == JAL) ||
-               (de_ex_inst.opcode == JALR);
+    assign flush = (de_ex_inst.opcode == BRANCH && branch_taken);
+    assign flush_id =  (de_inst.opcode == JAL) || (de_inst.opcode == JALR);
 
     
     always_ff@(posedge CLK) begin
