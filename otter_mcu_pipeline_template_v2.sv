@@ -101,7 +101,8 @@ module OTTER_MCU(input CLK,
      logic [31:0] if_de_pc;
      
      
-     assign pcWrite = 1'b1; 	//Hardwired high, assuming now hazards
+     
+//     assign pcWrite = 1'b1; 	//Hardwired high, assuming now hazards
      assign memRead1 = 1'b1; 	//Fetch new instruction every cycle
 
     //PC sel
@@ -124,11 +125,10 @@ module OTTER_MCU(input CLK,
    
 
     always_ff @(posedge CLK) begin
-        if (flush) begin
+        if (flush)
             if_de_pc <= 32'b0;
-        end else begin
+        else if (IF_ID_Write)
             if_de_pc <= pc;
-        end
     end
 
 
@@ -216,7 +216,7 @@ module OTTER_MCU(input CLK,
     end
 
     always_ff @(posedge CLK) begin
-        if (flush) begin
+        if (flush || stall) begin
             de_ex_inst <= '0;
             DE_EX_TYPE <= '0;
             de_ex_opA  <= 32'b0;
@@ -251,12 +251,58 @@ module OTTER_MCU(input CLK,
      types EX_MEM_TYPE;
      logic [31:0] opA_forwarded;
      logic [31:0] opB_forwarded;
-
+     logic [1:0] forwardA, forwardB;
      
+    HazardForwardingUnit hf (
+        .clk(CLK),
+        .reset(RESET),
+    
+        .IF_ID_rs1(de_inst.rs1_addr),
+        .IF_ID_rs2(de_inst.rs2_addr),
+    
+        .ID_EX_rs1(de_ex_inst.rs1_addr),
+        .ID_EX_rs2(de_ex_inst.rs2_addr),
+        .ID_EX_rd(de_ex_inst.rd_addr),
+        .ID_EX_RegWrite(de_ex_inst.regWrite),
+        .ID_EX_MemRead(de_ex_inst.memRead2),
+    
+        .EX_MEM_rd(ex_mem_inst.rd_addr),
+        .EX_MEM_RegWrite(ex_mem_inst.regWrite),
+    
+        .MEM_WB_rd(mem_wb_inst.rd_addr),
+        .MEM_WB_RegWrite(mem_wb_inst.regWrite),
+    
+        .forwardA(forwardA),
+        .forwardB(forwardB),
+    
+        .stall(stall),
+        .PCWrite(pcWrite),
+        .IF_ID_Write(IF_ID_Write)
+    );
+
+
+    always_comb begin
+        unique case (forwardA)
+            2'b00: aluAin = de_ex_opA;
+            2'b10: aluAin = ex_mem_aluRes;
+            2'b01: aluAin = rfIn;
+            default: aluAin = 32'd0;
+        endcase
+    end
+
+    always_comb begin
+        unique case (forwardB)
+            2'b00: aluBin = de_ex_opB;
+            2'b10: aluBin = ex_mem_aluRes;
+            2'b01: aluBin = rfIn;
+            default: aluBin = 32'd0;
+        endcase
+    end
+
      //RISC-V ALU
     ALU my_alu(
-    .OP_1(de_ex_opA), 
-    .OP_2(de_ex_opB),
+    .OP_1(aluAin), 
+    .OP_2(aluBin),
     .ALU_FUN(de_ex_inst.alu_fun),
     .RESULT(aluResult)
         );
