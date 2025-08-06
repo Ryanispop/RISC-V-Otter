@@ -88,7 +88,7 @@ module OTTER_MCU(input CLK,
     logic [1:0] pc_sel;
     logic [3:0]alu_fun;
     logic opA_sel;
-    
+    logic flush;
     logic br_lt,br_eq,br_ltu;
     
     
@@ -124,7 +124,11 @@ module OTTER_MCU(input CLK,
    
 
     always_ff @(posedge CLK) begin
-                if_de_pc <= pc;
+        if (flush) begin
+            if_de_pc <= 32'b0;
+        end else begin
+            if_de_pc <= pc;
+        end
     end
 
 
@@ -212,12 +216,21 @@ module OTTER_MCU(input CLK,
     end
 
     always_ff @(posedge CLK) begin
-        de_ex_inst <= de_inst;
-        DE_EX_TYPE <= DECODE_TYPE;
-        de_ex_opA <= A;
-        de_ex_opB <= B;
-        de_ex_rs2 <= rs2;
+        if (flush) begin
+            de_ex_inst <= '0;
+            DE_EX_TYPE <= '0;
+            de_ex_opA  <= 32'b0;
+            de_ex_opB  <= 32'b0;
+            de_ex_rs2  <= 32'b0;
+        end else begin
+            de_ex_inst <= de_inst;
+            DE_EX_TYPE <= DECODE_TYPE;
+            de_ex_opA  <= A;
+            de_ex_opB  <= B;
+            de_ex_rs2  <= rs2;
+        end
     end
+
 
 	//=== Register File ===//
     RegFile regfile (
@@ -238,6 +251,7 @@ module OTTER_MCU(input CLK,
      types EX_MEM_TYPE;
      logic [31:0] opA_forwarded;
      logic [31:0] opB_forwarded;
+
      
      //RISC-V ALU
     ALU my_alu(
@@ -279,6 +293,10 @@ module OTTER_MCU(input CLK,
             default:                                pc_sel = 2'b00; // pc + 4
         endcase
     end
+
+    assign flush = (de_ex_inst.opcode == BRANCH && branch_taken) ||
+               (de_ex_inst.opcode == JAL) ||
+               (de_ex_inst.opcode == JALR);
 
     
     always_ff@(posedge CLK) begin
