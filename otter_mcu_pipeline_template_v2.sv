@@ -10,7 +10,7 @@
 // Target Devices: 
 // Tool Versions: 
 // Description: 
-// 
+// 0
 // Dependencies: 
 // 
 // Revision:
@@ -40,6 +40,8 @@ typedef struct packed{
     logic rs1_used;
     logic rs2_used;
     logic rd_used;
+    logic alu_srcA;
+    logic [1:0] alu_srcB;
     logic [3:0] alu_fun;
     logic memWrite;
     logic memRead2;
@@ -48,6 +50,7 @@ typedef struct packed{
     logic [2:0] mem_type;  //sign, size
     logic [31:0] pc;
     logic [2:0] br_type;
+    logic [31:0] ir;
 } instr_t;
 
 typedef struct packed{
@@ -77,7 +80,7 @@ module OTTER_MCU(input CLK,
                 output logic IOBUS_WR 
 );           
     logic [6:0] opcode;
-    logic [31:0] pc, pc_value, next_pc, jalr_pc, branch_pc, jump_pc, int_pc,A,B,
+    logic [31:0] pc, pc_value, next_pc, jalr_pc, branch_pc, jump_pc, int_pc, A, B,
         I_immed,S_immed,U_immed,aluBin,aluAin,aluResult,rfIn,csr_reg, mem_data;
     
     logic [31:0] IR;
@@ -111,8 +114,8 @@ module OTTER_MCU(input CLK,
         case (pc_sel)
             2'b00: next_pc = pc + 4;    // PC + 4
             2'b01: next_pc = branch_pc;   // For branches
-            2'b10: next_pc = jalr_pc;     // For jalr
-            2'b11: next_pc = jump_pc;     // For jal
+            2'b11: next_pc = jalr_pc;     // For jalr
+            2'b10: next_pc = jump_pc;     // For jal
             default: next_pc = pc;
         endcase
     end
@@ -124,7 +127,7 @@ module OTTER_MCU(input CLK,
             pc <= next_pc;
     end
    
-    logic ld_use_hz, cntrl_haz, hold_cntrl_haz
+    logic ld_use_hz, cntrl_haz, hold_cntrl_haz;
 
     always_ff @(posedge CLK) begin
         if (!ld_use_hz)
@@ -136,8 +139,7 @@ module OTTER_MCU(input CLK,
     assign memRead1 = !ld_use_hz;
      
 //==== Instruction Decode ===========================================
-    logic [31:0] de_ex_opA;
-    logic [31:0] de_ex_opB;
+    logic [31:0] de_ex_rs1;
     logic [31:0] de_ex_rs2;
 
     //=== Immediate Generation ===//
@@ -163,8 +165,8 @@ module OTTER_MCU(input CLK,
    .func7     (IR[30]),    
    .func3     (IR[14:12]),   
    .ALU_FUN   (alu_fun),
-   .srcA_SEL  (alu_srcA),
-   .srcB_SEL  (alu_srcB), 
+   .srcA_SEL  (de_inst.alu_srcA),
+   .srcB_SEL  (de_inst.alu_srcB), 
    .RF_SEL    (rf_sel),
    .REG_WRITE (regWrite),
    .MEM_WRITE (memWrite),
@@ -176,7 +178,7 @@ module OTTER_MCU(input CLK,
     
     opcode_t OPCODE;
     assign OPCODE = opcode_t'(IR[6:0]);
-    
+    assign de_inst.ir = IR;
     assign de_inst.rs1_addr=IR[19:15];
     assign de_inst.rs2_addr=IR[24:20];
     assign de_inst.rd_addr=IR[11:7];
@@ -196,39 +198,17 @@ module OTTER_MCU(input CLK,
     assign de_inst.rf_wr_sel = rf_sel;
     assign de_inst.mem_type  = IR[14:12];
     assign de_inst.pc        = if_de_pc;
-     
-    //ALU source a mux
-    always_comb begin
-        unique case (alu_srcA)
-            1'd0:   A = rs1;
-            1'd1:   A = U_type;
-            default: A = 32'd0;
-        endcase
-    end
-
-    // ALU source B mux (SystemVerilog version)
-    always_comb begin
-        unique case (alu_srcB)
-            2'd0:   B = rs2;
-            2'd1:   B = I_type;
-            2'd2:   B = S_type;
-            2'd3:   B = if_de_pc;
-            default: B = 32'd0;
-        endcase
-    end
 
     always_ff @(posedge CLK) begin
         if (cntrl_haz || hold_cntrl_haz || ld_use_hz) begin
             de_ex_inst <= '0;
             DE_EX_TYPE <= '0;
-            de_ex_opA  <= 32'b0;
-            de_ex_opB  <= 32'b0;
+            de_ex_rs1  <= 32'b0;
             de_ex_rs2  <= 32'b0;
         end else begin
             de_ex_inst <= de_inst;
             DE_EX_TYPE <= DECODE_TYPE;
-            de_ex_opA  <= A;
-            de_ex_opB  <= B;
+            de_ex_rs1  <= rs1;
             de_ex_rs2  <= rs2;
         end
     end
@@ -251,15 +231,13 @@ module OTTER_MCU(input CLK,
      logic [31:0] ex_mem_aluRes;
      instr_t ex_mem_inst;
      types EX_MEM_TYPE;
-     logic [31:0] opA_forwarded;
-     logic [31:0] opB_forwarded;
      logic [1:0] forwardA, forwardB;
 
 
 //---------HAZARD HANDLING, FORWARDING-------------//
     logic [1:0] fsel1, fsel2;
     logic [6:0] ex_load_op;
-    assign ex_load_op = de_ex_inst.ir[6:0];
+    assign ex_load_op = de_ex_inst.opcode;
     
     HazardForwardingUnit HazardUnit(.opcode(ex_load_op),
     .de_adr1(de_inst.rs1_addr),
@@ -268,10 +246,10 @@ module OTTER_MCU(input CLK,
     .ex_adr2(de_ex_inst.rs2_addr),
     .ex_rd(de_ex_inst.rd_addr),
     .mem_rd(ex_mem_inst.rd_addr),
-    .wb_rd(wb_t.rd_addr),
+    .wb_rd(mem_wb_inst.rd_addr),
     .pc_source(pc_sel),
     .mem_regWrite(ex_mem_inst.regWrite),
-    .wb_regWrite(wb_t.regWrite),
+    .wb_regWrite(mem_wb_inst.regWrite),
     .de_rs1_used(de_inst.rs1_used),
     .de_rs2_used(de_inst.rs2_used),
     .ex_rs1_used(de_ex_inst.rs1_used),
@@ -283,19 +261,39 @@ module OTTER_MCU(input CLK,
 
     always_comb begin
         unique case (fsel1)
-            2'b00: aluAin = de_ex_opA;
-            2'b10: aluAin = ex_mem_aluRes;
-            2'b01: aluAin = rfIn;
+            2'b00: aluAin = A;
+            2'b01: aluAin = ex_mem_aluRes;
+            2'b10: aluAin = rfIn;
             default: aluAin = 32'd0;
         endcase
     end
 
     always_comb begin
         unique case (fsel2)
-            2'b00: aluBin = de_ex_opB;
-            2'b10: aluBin = ex_mem_aluRes;
-            2'b01: aluBin = rfIn;
+            2'b00: aluBin = B;
+            2'b01: aluBin = ex_mem_aluRes;
+            2'b10: aluBin = rfIn;
             default: aluBin = 32'd0;
+        endcase
+    end
+
+    //ALU source a mux
+    always_comb begin
+        unique case (de_ex_inst.alu_srcA)
+            1'd0:   A = de_ex_rs1;
+            1'd1:   A = DE_EX_TYPE.U_TYPE;
+            default: A = 32'd0;
+        endcase
+    end
+
+    // ALU source B mux (SystemVerilog version)
+    always_comb begin
+        unique case (de_ex_inst.alu_srcB)
+            2'd0:   B = de_ex_rs2;
+            2'd1:   B = DE_EX_TYPE.I_TYPE;
+            2'd2:   B = DE_EX_TYPE.S_TYPE;
+            2'd3:   B = de_ex_inst.pc;
+            default: B = 32'd0;
         endcase
     end
 
@@ -313,8 +311,8 @@ module OTTER_MCU(input CLK,
     assign branch_pc = de_ex_inst.pc + DE_EX_TYPE.B_TYPE;
     
     BranchUnit BranchUnit(.IR(de_ex_inst.ir),
-    .RS1(aluAin),
-    .RS2(aluBin),
+    .RS1(de_ex_rs1),
+    .RS2(de_ex_rs2),
     .PC_SOURCE(pc_sel));
 
     
@@ -323,8 +321,8 @@ module OTTER_MCU(input CLK,
     always_ff@(posedge CLK) begin
         ex_mem_inst <= de_ex_inst;
         EX_MEM_TYPE <= DE_EX_TYPE;
-        opA_forwarded <= de_ex_opA;
-        opB_forwarded <= de_ex_opB; 
+//        opA_forwarded <= de_ex_opA;
+//        opB_forwarded <= de_ex_opB; 
         ex_mem_rs2 <= de_ex_rs2;
         ex_mem_aluRes <= aluResult;
     end
