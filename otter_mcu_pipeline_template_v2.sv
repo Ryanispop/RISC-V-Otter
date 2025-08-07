@@ -104,7 +104,7 @@ module OTTER_MCU(input CLK,
      
      
 //     assign pcWrite = 1'b1; 	//Hardwired high, assuming now hazards
-     assign memRead1 = 1'b1; 	//Fetch new instruction every cycle
+//    assign memRead1 = 1'b1; 	//Fetch new instruction every cycle
 
     //PC sel
     always_comb begin
@@ -124,15 +124,16 @@ module OTTER_MCU(input CLK,
             pc <= next_pc;
     end
    
+    logic ld_use_hz, cntrl_haz, hold_cntrl_haz
 
     always_ff @(posedge CLK) begin
-        if (flush || flush_id)
-            if_de_pc <= 32'b0;
-        else if (IF_ID_Write)
+        if (!ld_use_hz)
             if_de_pc <= pc;
+        hold_cntrl_haz <= cntrl_haz;
     end
 
-
+    assign pcWrite = !ld_use_hz;
+    assign memRead1 = !ld_use_hz;
      
 //==== Instruction Decode ===========================================
     logic [31:0] de_ex_opA;
@@ -216,12 +217,8 @@ module OTTER_MCU(input CLK,
         endcase
     end
 
-    //Jump Logic
-    assign jump_pc = de_ex_inst.pc + DECODE_TYPE.J_TYPE;
-    assign jalr_pc = rs1 + DECODE_TYPE.I_TYPE;
-
     always_ff @(posedge CLK) begin
-        if (flush || stall) begin
+        if (cntrl_haz || hold_cntrl_haz || ld_use_hz) begin
             de_ex_inst <= '0;
             DE_EX_TYPE <= '0;
             de_ex_opA  <= 32'b0;
@@ -257,37 +254,35 @@ module OTTER_MCU(input CLK,
      logic [31:0] opA_forwarded;
      logic [31:0] opB_forwarded;
      logic [1:0] forwardA, forwardB;
-     
-    HazardForwardingUnit hf (
-        .clk(CLK),
-        .reset(RESET),
-    
-        .IF_ID_rs1(de_inst.rs1_addr),
-        .IF_ID_rs2(de_inst.rs2_addr),
-    
-        .ID_EX_rs1(de_ex_inst.rs1_addr),
-        .ID_EX_rs2(de_ex_inst.rs2_addr),
-        .ID_EX_rd(de_ex_inst.rd_addr),
-        .ID_EX_RegWrite(de_ex_inst.regWrite),
-        .ID_EX_MemRead(de_ex_inst.memRead2),
-    
-        .EX_MEM_rd(ex_mem_inst.rd_addr),
-        .EX_MEM_RegWrite(ex_mem_inst.regWrite),
-    
-        .MEM_WB_rd(mem_wb_inst.rd_addr),
-        .MEM_WB_RegWrite(mem_wb_inst.regWrite),
-    
-        .forwardA(forwardA),
-        .forwardB(forwardB),
-    
-        .stall(stall),
-        .PCWrite(pcWrite),
-        .IF_ID_Write(IF_ID_Write)
-    );
 
+
+//---------HAZARD HANDLING, FORWARDING-------------//
+    logic [1:0] fsel1, fsel2;
+    logic [6:0] ex_load_op;
+    assign ex_load_op = de_ex_inst.ir[6:0];
+    
+    HazardUnit HazardUnit(.opcode(ex_load_op),
+    .de_adr1(de_inst.rs1_addr),
+    .de_adr2(de_inst.rs2_addr),
+    .ex_adr1(de_ex_inst.rs1_addr),
+    .ex_adr2(de_ex_inst.rs2_addr),
+    .ex_rd(de_ex_inst.rd_addr),
+    .mem_rd(ex_mem_inst.rd_addr),
+    .wb_rd(wb_t.rd_addr),
+    .pc_source(pc_sel),
+    .mem_regWrite(ex_mem_inst.regWrite),
+    .wb_regWrite(wb_t.regWrite),
+    .de_rs1_used(de_inst.rs1_used),
+    .de_rs2_used(de_inst.rs2_used),
+    .ex_rs1_used(de_ex_inst.rs1_used),
+    .ex_rs2_used(de_ex_inst.rs2_used),
+    .fsel1(fsel1),
+    .fsel2(fsel2),
+    .load_use_haz(ld_use_hz),
+    .control_haz(cntrl_haz));
 
     always_comb begin
-        unique case (forwardA)
+        unique case (fsel1)
             2'b00: aluAin = de_ex_opA;
             2'b10: aluAin = ex_mem_aluRes;
             2'b01: aluAin = rfIn;
@@ -296,7 +291,7 @@ module OTTER_MCU(input CLK,
     end
 
     always_comb begin
-        unique case (forwardB)
+        unique case (fsel2)
             2'b00: aluBin = de_ex_opB;
             2'b10: aluBin = ex_mem_aluRes;
             2'b01: aluBin = rfIn;
@@ -311,42 +306,18 @@ module OTTER_MCU(input CLK,
     .ALU_FUN(de_ex_inst.alu_fun),
     .RESULT(aluResult)
         );
+        
     //Branch addr gen
     assign jump_pc = de_ex_inst.pc + DE_EX_TYPE.J_TYPE;
-    assign jalr_pc = rs1 + DE_EX_TYPE.I_TYPE; 
+    assign jalr_pc = aluAin + DE_EX_TYPE.I_TYPE; 
     assign branch_pc = de_ex_inst.pc + DE_EX_TYPE.B_TYPE;
     
-    //branch cond gen
-    //Branch condition generator
-    assign br_eq = (de_ex_opA == de_ex_opB);
-    assign br_lt = ($signed(de_ex_opA) < $signed(de_ex_opB));
-    assign br_ltu = (de_ex_opA < de_ex_opB);
+    BranchUnit BranchUnit(.IR(de_ex_inst.ir),
+    .RS1(aluAin),
+    .RS2(aluBin),
+    .PC_SOURCE(pc_sel));
+
     
-    logic branch_taken;
-
-    always_comb begin
-        unique case (de_ex_inst.br_type)
-            BEQ:   branch_taken = br_eq;
-            BNE:   branch_taken = ~br_eq;
-            BLT:   branch_taken = br_lt;
-            BGE:   branch_taken = ~br_lt;
-            BLTU:  branch_taken = br_ltu;
-            BGEU:  branch_taken = ~br_ltu;
-            default: branch_taken = 1'b0;
-        endcase
-    end
-
-    always_comb begin
-        case (1'b1)
-            ((de_ex_inst.opcode == BRANCH) && branch_taken): pc_sel = 2'b01; // branch_pc
-            (de_inst.opcode == JAL):             pc_sel = 2'b11; // jump_pc
-            (de_inst.opcode == JALR):            pc_sel = 2'b10; // jalr_pc
-            default:                                pc_sel = 2'b00; // pc + 4
-        endcase
-    end
-
-    assign flush = (de_ex_inst.opcode == BRANCH && branch_taken);
-    assign flush_id =  (de_inst.opcode == JAL) || (de_inst.opcode == JALR);
 
     
     always_ff@(posedge CLK) begin
