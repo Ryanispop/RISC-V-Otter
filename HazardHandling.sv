@@ -19,66 +19,64 @@
 // 
 //////////////////////////////////////////////////////////////////////////////////
 
-module HazardForwardingUnit (
-    input  logic        clk,
-    input  logic        reset,
-
-    // Decode stage
-    input  logic [4:0]  IF_ID_rs1,
-    input  logic [4:0]  IF_ID_rs2,
-
-    // Execute stage
-    input  logic [4:0]  ID_EX_rs1,
-    input  logic [4:0]  ID_EX_rs2,
-    input  logic [4:0]  ID_EX_rd,
-    input  logic        ID_EX_RegWrite,
-    input  logic        ID_EX_MemRead,
-
-    // Memory stage
-    input  logic [4:0]  EX_MEM_rd,
-    input  logic        EX_MEM_RegWrite,
-
-    // Write-back stage
-    input  logic [4:0]  MEM_WB_rd,
-    input  logic        MEM_WB_RegWrite,
-
-    output logic [1:0]  forwardA,
-    output logic [1:0]  forwardB,
-
-    output logic        stall,
-    output logic        PCWrite,
-    output logic        IF_ID_Write
+module HazardForwardingUnit(
+    input logic [6:0] opcode,
+    input logic [4:0] de_adr1,
+    input logic [4:0] de_adr2,
+    input logic [4:0] ex_adr1,
+    input logic [4:0] ex_adr2,
+    input logic [4:0] ex_rd,
+    input logic [4:0] mem_rd,
+    input logic [4:0] wb_rd,
+    input logic [1:0] pc_source,
+    input logic mem_regWrite,
+    input logic wb_regWrite,
+    input logic de_rs1_used,
+    input logic de_rs2_used,
+    input logic ex_rs1_used,
+    input logic ex_rs2_used,
+    output logic [1:0] fsel1,
+    output logic [1:0] fsel2,
+    output logic load_use_haz,
+    output logic control_haz
 );
 
-    // Forwarding logic (EX stage)
-    always_comb begin
-        // Default to no forwarding
-        forwardA = 2'b00;
-        forwardB = 2'b00;
+always_comb begin
+    fsel1 = 2'b00;
+    fsel2 = 2'b00;
+    load_use_haz = 1'b0;
+    control_haz = 1'b0;
+    //flush = 1'b0;
 
-        // EX hazard
-        if (EX_MEM_RegWrite && (EX_MEM_rd != 0) && (EX_MEM_rd == ID_EX_rs1))
-            forwardA = 2'b10;
-        else if (MEM_WB_RegWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rs1))
-            forwardA = 2'b01;
-
-        if (EX_MEM_RegWrite && (EX_MEM_rd != 0) && (EX_MEM_rd == ID_EX_rs2))
-            forwardB = 2'b10;
-        else if (MEM_WB_RegWrite && (MEM_WB_rd != 0) && (MEM_WB_rd == ID_EX_rs2))
-            forwardB = 2'b01;
+    //Selects for forwarding muxes
+    if (mem_rd == ex_adr1 && ex_rs1_used && mem_regWrite)
+        fsel1 = 2'b01;
+    else if (wb_rd == ex_adr1 && ex_rs1_used && wb_regWrite)
+        fsel1 = 2'b10;
+    else
+        fsel1 = 2'b00;
+        
+    if (mem_rd == ex_adr2 && ex_rs2_used && mem_regWrite)
+        fsel2 = 2'b01;
+    else if (wb_rd == ex_adr2 && ex_rs2_used && wb_regWrite)
+        fsel2 = 2'b10;
+    else
+        fsel2 = 2'b00;
+        
+    //Load-use data hazard
+    if ((opcode == 7'b0000011) && ((de_adr1 == ex_rd && de_rs1_used) || (de_adr2 == ex_rd && de_rs2_used)))
+        load_use_haz = 1'b1;
+    else
+        load_use_haz = 1'b0;
+    
+    //Control hazards--jal,jalr,branchh
+    if (pc_source != 2'b00) begin
+        control_haz = 1'b1;
     end
-
-    // Load-use hazard detection (stalling)
-    always_comb begin
-        if (ID_EX_MemRead && ((ID_EX_rd == IF_ID_rs1) || (ID_EX_rd == IF_ID_rs2))) begin
-            stall       = 1;
-            PCWrite     = 0;
-            IF_ID_Write = 0;
-        end else begin
-            stall       = 0;
-            PCWrite     = 1;
-            IF_ID_Write = 1;
-        end
+    else begin
+        control_haz = 1'b0;
     end
+end
 
 endmodule
+
