@@ -261,7 +261,7 @@ module OTTER_MCU(input CLK,
     logic [6:0] ex_load_op;
     assign ex_load_op = de_ex_inst.ir[6:0];
     
-    HazardUnit HazardUnit(.opcode(ex_load_op),
+    HazardForwardingUnit HazardUnit(.opcode(ex_load_op),
     .de_adr1(de_inst.rs1_addr),
     .de_adr2(de_inst.rs2_addr),
     .ex_adr1(de_ex_inst.rs1_addr),
@@ -306,7 +306,7 @@ module OTTER_MCU(input CLK,
     .ALU_FUN(de_ex_inst.alu_fun),
     .RESULT(aluResult)
         );
-        
+
     //Branch addr gen
     assign jump_pc = de_ex_inst.pc + DE_EX_TYPE.J_TYPE;
     assign jalr_pc = aluAin + DE_EX_TYPE.I_TYPE; 
