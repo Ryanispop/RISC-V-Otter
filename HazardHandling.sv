@@ -10,7 +10,7 @@
 // Target Devices: 
 // Tool Versions: 
 // Description: 
-// 
+// 0
 // Dependencies: 
 // 
 // Revision:
@@ -49,16 +49,16 @@ always_comb begin
     //flush = 1'b0;
 
     //Selects for forwarding muxes
-    if (mem_rd == ex_adr1 && ex_rs1_used && mem_regWrite)
+    if (mem_rd == ex_adr1 && ex_rs1_used && mem_regWrite && ex_adr1 != 5'd0)
         fsel1 = 2'b01;
-    else if (wb_rd == ex_adr1 && ex_rs1_used && wb_regWrite)
+    else if (wb_rd == ex_adr1 && ex_rs1_used && wb_regWrite && ex_adr1 != 5'd0)
         fsel1 = 2'b10;
     else
         fsel1 = 2'b00;
         
-    if (mem_rd == ex_adr2 && ex_rs2_used && mem_regWrite)
+    if (mem_rd == ex_adr2 && ex_rs2_used && mem_regWrite && ex_adr2 != 5'd0)
         fsel2 = 2'b01;
-    else if (wb_rd == ex_adr2 && ex_rs2_used && wb_regWrite)
+    else if (wb_rd == ex_adr2 && ex_rs2_used && wb_regWrite && ex_adr2 != 5'd0)
         fsel2 = 2'b10;
     else
         fsel2 = 2'b00;
@@ -79,4 +79,3 @@ always_comb begin
 end
 
 endmodule
-
