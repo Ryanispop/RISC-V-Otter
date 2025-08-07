@@ -19,7 +19,11 @@
 // 
 //////////////////////////////////////////////////////////////////////////////////
 
+<<<<<<< HEAD
 module HazardUnit(
+=======
+module HazardForwardingUnit(
+>>>>>>> 84e06478d7c9adde56ef870bfc9db57843b9a511
     input logic [6:0] opcode,
     input logic [4:0] de_adr1,
     input logic [4:0] de_adr2,
@@ -79,3 +83,4 @@ always_comb begin
 end
 
 endmodule
+
