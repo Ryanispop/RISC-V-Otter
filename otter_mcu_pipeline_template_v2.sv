@@ -10,7 +10,7 @@
 // Target Devices: 
 // Tool Versions: 
 // Description: 
-// 
+// 0
 // Dependencies: 
 // 
 // Revision:
@@ -50,6 +50,7 @@ typedef struct packed{
     logic [2:0] mem_type;  //sign, size
     logic [31:0] pc;
     logic [2:0] br_type;
+    logic [31:0] ir;
 } instr_t;
 
 typedef struct packed{
@@ -79,7 +80,7 @@ module OTTER_MCU(input CLK,
                 output logic IOBUS_WR 
 );           
     logic [6:0] opcode;
-    logic [31:0] pc, pc_value, next_pc, jalr_pc, branch_pc, jump_pc, int_pc,A,B,
+    logic [31:0] pc, pc_value, next_pc, jalr_pc, branch_pc, jump_pc, int_pc, A, B,
         I_immed,S_immed,U_immed,aluBin,aluAin,aluResult,rfIn,csr_reg, mem_data;
     
     logic [31:0] IR;
@@ -90,23 +91,48 @@ module OTTER_MCU(input CLK,
     logic [1:0] pc_sel;
     logic [3:0]alu_fun;
     logic opA_sel;
-    logic flush;
-    logic flush_id;
     logic br_lt,br_eq,br_ltu;
     
     
     logic [31:0] rs1, rs2;
 
     logic [31:0] dout2;
-              
+             
 //==== Instruction Fetch ===========================================
+    logic [31:0] w0,w1,w2,w3,w4,w5,w6,w7;
+    logic update, hit, miss, cache_stall;
+    logic [31:0] if_de_pc, if_de_ir;
+    logic ld_use_hz, cntrl_haz, hold_cntrl_haz;
+    logic [31:0] cache_pc;
+    
+    // Block-aligned address for the 8 words
+    imem imem_i (
+      .a({pc[31:5], 5'b0}),
+      .w0(w0), .w1(w1), .w2(w2), .w3(w3),
+      .w4(w4), .w5(w5), .w6(w6), .w7(w7)
+    );
+    assign cache_pc = (pc_sel == 2'b00) ? pc : next_pc;
+    
+    Cache icache (
+      .PC(cache_pc),
+      .CLK(CLK),
+      .update(update),
+      .w0(w0), .w1(w1), .w2(w2), .w3(w3),
+      .w4(w4), .w5(w5), .w6(w6), .w7(w7),
+      .rd(IR),               // <- feed pipeline IR from cache
+      .hit(hit),
+      .miss(miss)
+    );
+    
+    CacheFSM icache_fsm (
+      .hit(hit),
+      .miss(miss),
+      .CLK(CLK),
+      .RST(RESET),
+      .update(update),
+      .pc_stall(cache_stall) // <- stall request from I-cache
+    );
 
-     logic [31:0] if_de_pc;
-     
-     
-     
-//     assign pcWrite = 1'b1; 	//Hardwired high, assuming now hazards
-//    assign memRead1 = 1'b1; 	//Fetch new instruction every cycle
 
     //PC sel
     always_comb begin
@@ -126,16 +152,32 @@ module OTTER_MCU(input CLK,
             pc <= next_pc;
     end
    
-    logic ld_use_hz, cntrl_haz, hold_cntrl_haz;
-
-    always_ff @(posedge CLK) begin
-        if (!ld_use_hz)
-            if_de_pc <= pc;
-        hold_cntrl_haz <= cntrl_haz;
+    assign pcWrite  = (!(ld_use_hz | cache_stall)) || cntrl_haz;
+    assign memRead1 = pcWrite;
+    
+    
+    always_ff @(posedge CLK or posedge RESET) begin
+        if (RESET) begin
+            if_de_pc <= 32'd0;
+            if_de_ir <= 32'h00000013; // NOP
+            hold_cntrl_haz <= 1'b0;
+        end else begin
+            // Save the current control hazard state for next cycle
+            hold_cntrl_haz <= cntrl_haz;
+    
+            if (cntrl_haz) begin
+                // Flush the pipeline: insert NOP
+                if_de_ir <= 32'h00000013;; // NOP
+                if_de_pc <= 32'd0;        // optional: clear PC in ID stage
+            end else if (!ld_use_hz && !cache_stall) begin
+                // Normal instruction fetch (no stall, no flush)
+                if_de_ir <= IR;
+                if_de_pc <= pc;
+            end
+            // Else: stall -> keep previous values (freeze IF/ID)
+        end
     end
 
-    assign pcWrite = !ld_use_hz;
-    assign memRead1 = !ld_use_hz;
      
 //==== Instruction Decode ===========================================
     logic [31:0] de_ex_rs1;
@@ -144,7 +186,7 @@ module OTTER_MCU(input CLK,
     //=== Immediate Generation ===//
     logic [31:0] I_type, S_type, U_type, B_type, J_type;
     IMMED_GEN immgen (
-        .ir       (IR[31:7]),
+        .ir       (if_de_ir[31:7]),
         .U_type   (U_type),
         .I_type   (I_type),
         .S_type   (S_type),
@@ -160,9 +202,9 @@ module OTTER_MCU(input CLK,
     assign DECODE_TYPE.S_TYPE = S_type; 
     
     CU_DCDR my_cu_dcdr(
-   .opcode    (IR[6:0]),    
-   .func7     (IR[30]),    
-   .func3     (IR[14:12]),   
+   .opcode    (if_de_ir[6:0]),    
+   .func7     (if_de_ir[30]),    
+   .func3     (if_de_ir[14:12]),   
    .ALU_FUN   (alu_fun),
    .srcA_SEL  (de_inst.alu_srcA),
    .srcB_SEL  (de_inst.alu_srcB), 
@@ -176,11 +218,12 @@ module OTTER_MCU(input CLK,
     instr_t de_ex_inst, de_inst;
     
     opcode_t OPCODE;
-    assign OPCODE = opcode_t'(IR[6:0]);
-    
-    assign de_inst.rs1_addr=IR[19:15];
-    assign de_inst.rs2_addr=IR[24:20];
-    assign de_inst.rd_addr=IR[11:7];
+    assign OPCODE = opcode_t'(if_de_ir[6:0]);
+    assign de_inst.ir = if_de_ir;
+    assign de_inst.rs1_addr=if_de_ir[19:15];
+    assign de_inst.rs2_addr=if_de_ir[24:20];
+    assign de_inst.rd_addr=if_de_ir[11:7];
+    assign de_inst.rd_addr=if_de_ir[11:7];
     assign de_inst.opcode=OPCODE;
    
     assign de_inst.rs1_used=    de_inst.rs1_addr != 0
@@ -197,10 +240,9 @@ module OTTER_MCU(input CLK,
     assign de_inst.rf_wr_sel = rf_sel;
     assign de_inst.mem_type  = IR[14:12];
     assign de_inst.pc        = if_de_pc;
-     
 
     always_ff @(posedge CLK) begin
-        if (cntrl_haz || hold_cntrl_haz || ld_use_hz) begin
+        if (cntrl_haz || hold_cntrl_haz || ld_use_hz || cache_stall) begin
             de_ex_inst <= '0;
             DE_EX_TYPE <= '0;
             de_ex_rs1  <= 32'b0;
@@ -262,8 +304,8 @@ module OTTER_MCU(input CLK,
     always_comb begin
         unique case (fsel1)
             2'b00: aluAin = A;
-            2'b10: aluAin = ex_mem_aluRes;
-            2'b01: aluAin = rfIn;
+            2'b01: aluAin = ex_mem_aluRes;
+            2'b10: aluAin = rfIn;
             default: aluAin = 32'd0;
         endcase
     end
@@ -271,8 +313,8 @@ module OTTER_MCU(input CLK,
     always_comb begin
         unique case (fsel2)
             2'b00: aluBin = B;
-            2'b10: aluBin = ex_mem_aluRes;
-            2'b01: aluBin = rfIn;
+            2'b01: aluBin = ex_mem_aluRes;
+            2'b10: aluBin = rfIn;
             default: aluBin = 32'd0;
         endcase
     end
@@ -310,9 +352,10 @@ module OTTER_MCU(input CLK,
     assign jalr_pc = aluAin + DE_EX_TYPE.I_TYPE; 
     assign branch_pc = de_ex_inst.pc + DE_EX_TYPE.B_TYPE;
     
-    BranchUnit BranchUnit(.IR(de_ex_inst.ir),
-    .RS1(de_ex_rs1),
-    .RS2(de_ex_rs1),
+    BranchUnit BranchUnit(
+    .IR(de_ex_inst.ir),
+    .RS1(aluAin),
+    .RS2(aluBin),
     .PC_SOURCE(pc_sel));
 
     
@@ -321,8 +364,8 @@ module OTTER_MCU(input CLK,
     always_ff@(posedge CLK) begin
         ex_mem_inst <= de_ex_inst;
         EX_MEM_TYPE <= DE_EX_TYPE;
-        opA_forwarded <= de_ex_opA;
-        opB_forwarded <= de_ex_opB; 
+//        opA_forwarded <= de_ex_opA;
+//        opB_forwarded <= de_ex_opB; 
         ex_mem_rs2 <= de_ex_rs2;
         ex_mem_aluRes <= aluResult;
     end
@@ -338,6 +381,7 @@ module OTTER_MCU(input CLK,
     instr_t mem_wb_inst;
     types MEM_WB_TYPE;
      
+    logic [31:0] mem_dout1_unused;
      
     Memory OTTER_MEMORY (
     .MEM_CLK   (CLK),
@@ -351,7 +395,7 @@ module OTTER_MCU(input CLK,
     .MEM_SIGN  (ex_mem_inst.mem_type[2]),
     .IO_IN     (IOBUS_IN),
     .IO_WR     (IOBUS_WR),
-    .MEM_DOUT1 (IR),
+    .MEM_DOUT1 (mem_dout1_unused),
     .MEM_DOUT2 (dout2)
     );
     
